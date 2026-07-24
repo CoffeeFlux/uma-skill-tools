@@ -127,19 +127,15 @@ export class LogNormalRandomPolicy extends DistributionRandomPolicy {
 			const b = Math.exp(y * m + this.mu);
 			nums.push(a,b);
 		}
-		// this is one of the more mathematically suspect parts of the whole endeavour. essentially we have a bunch of numbers `nums` in (0,+∞).
-		// what we want is a bunch of numbers in [0,upper] with essentially the same skewness, excess kurtosis, etc as `nums`. the obvious way to do
-		// that is to normalize nums to [0,1] and multiply that by `upper`. formerly we normalized to the observed min and max, but particularly
-		// when `nsamples` is small this is not great. instead we estimate the 0.1th percentile and 99.9th percentile of values that we are likely
-		// to see for a given μ and σ, and normalize to that. i am not completely sure that this is a reasonable thing to do.
-		// 
-		// i feel like there should be some way to do this directly and avoid this step while being more theoretically sound, but i haven't thought
-		// of it yet.
-		// 
-		// the reason we have to do the scaling like this is because `upper` isn't known at the time the parameters are chosen, so we can't pick ones
-		// that naturally go from 0 to ~upper.
-		// 
-		// the dumb part about this is that it makes μ meaningless obviously.
+		// we have samples from a distribution on (0,+∞) and need activation positions on [0,upper] with the same shape. `upper` (the total
+		// length of the eligible regions) isn't known when μ and σ are chosen, so instead of picking parameters that naturally cover [0,upper]
+		// we rescale after the fact: map the estimated [0.1th percentile, 99.9th percentile] onto [0,upper] and clamp.
+		// this is sounder than it may look:
+		// - the rescale is affine, and skewness/excess kurtosis are standardized central moments, which are invariant under affine maps, so
+		//   the shape is preserved exactly. the only actual distortion is the clamp, which touches 0.1% of the mass at each end.
+		// - the log-normal is a scale family (c·LogNormal(μ,σ) = LogNormal(μ+ln c, σ)), so rescaling by fixed quantiles once `upper` is known
+		//   is exactly equivalent to deferring the choice of μ until the scale is known, which is precisely our situation. this is also why μ
+		//   drops out of the result entirely: after normalization the model genuinely has the single shape parameter σ, and that's fine.
 
 		// inverse CDF is e^(μ + σ√2 · erf⁻¹(2p - 1))
 		// constants obtained via Mathematica `InverseErf[2 * 0.999 - 1] * Sqrt[2]`
@@ -150,7 +146,45 @@ export class LogNormalRandomPolicy extends DistributionRandomPolicy {
 }
 
 export class ErlangRandomPolicy extends DistributionRandomPolicy {
-	constructor(readonly k: number, readonly lambda: number) { super(); }
+	readonly min: number
+	readonly max: number
+
+	constructor(readonly k: number, readonly lambda: number) {
+		super();
+		// the comment in LogNormalRandomPolicy#distribution applies here as well: rescale [0.1th percentile, 99.9th percentile] onto [0,upper].
+		// Erlang is likewise a scale family (c·Erlang(k,λ) = Erlang(k,λ/c)), so λ cancels in the rescale and k is the only shape parameter.
+		// there is no closed-form inverse CDF for an Erlang distribution, but for integer k the CDF itself has a closed form, so the two
+		// quantiles can be computed exactly by bisection. they only depend on the (fixed) parameters, so do it once here.
+		this.min = this.quantile(0.001);
+		this.max = this.quantile(0.999);
+	}
+
+	// F(x) = 1 - e^(-λx) · Σ_{n=0}^{k-1} (λx)^n/n!
+	cdf(x: number) {
+		const lx = this.lambda * x;
+		let sum = 1, term = 1;
+		for (let n = 1; n < this.k; ++n) {
+			term *= lx / n;
+			sum += term;
+		}
+		return 1 - Math.exp(-lx) * sum;
+	}
+
+	quantile(p: number) {
+		let lo = 0, hi = 1;
+		while (this.cdf(hi) < p) {
+			hi *= 2;
+		}
+		for (let i = 0; i < 60; ++i) {
+			const mid = (lo + hi) / 2;
+			if (this.cdf(mid) < p) {
+				lo = mid;
+			} else {
+				hi = mid;
+			}
+		}
+		return (lo + hi) / 2;
+	}
 
 	distribution(upper: number, nsamples: number, rng: PRNG) {
 		const nums = [];
@@ -162,16 +196,8 @@ export class ErlangRandomPolicy extends DistributionRandomPolicy {
 			const n = -Math.log(u) / this.lambda;
 			nums.push(n);
 		}
-		// the comment in LogNormalRandomPolicy#distribution applies here as well, but much worse. there is no closed-form inverse CDF for an Erlang
-		// distribution, so (and surely there's a better way to do this) we just pretend it's a chi-squared distribution with 2k and then use the
-		// Wilson-Hilferty transformation to approximate it as a normal distribution. yes, this is pretty awful. in practice the approximation is
-		// surprisingly okay, though i don't really feel good about this. im also not at all sure i didnt make some mistakes in the math, but testing
-		// it numerically its remarkably close.
-		// as with μ above, λ controls the scale of the distribution but we rescale everything anyway, so it is completely irrelevant.
-		const min = this.k * Math.pow(1 - 1/(9*this.k) + -3.09023 * Math.sqrt(1/(9*this.k)), 3) / this.lambda,
-			max = this.k * Math.pow(1 - 1/(9*this.k) + 3.09023 * Math.sqrt(1/(9*this.k)), 3) / this.lambda;
-		const range = max - min;
-		return nums.map(n => Math.floor(upper * Math.min(Math.max(n - min, 0) / range, 1.0)));
+		const range = this.max - this.min;
+		return nums.map(n => Math.floor(upper * Math.min(Math.max(n - this.min, 0) / range, 1.0)));
 	}
 }
 
