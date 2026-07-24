@@ -9,7 +9,7 @@ import {
 	ActivationSamplePolicy,
 	ImmediatePolicy, RandomPolicy,
 	DistributionRandomPolicy, UniformRandomPolicy, LogNormalRandomPolicy, ErlangRandomPolicy, KumaraswamyRandomPolicy,
-	StraightRandomPolicy, AllCornerRandomPolicy
+	LatchedRandomPolicy, StraightRandomPolicy, AllCornerRandomPolicy
 } from './ActivationSamplePolicy';
 
 // K as in SKI combinators
@@ -258,6 +258,34 @@ export function noopKumaraswamyRandom(a: number, b: number) {
 	return kumaraswamyRandom(a, b, noopAll);
 }
 
+// cumulative-count conditions latch: they are true from their underlying event until the end of the race (see
+// LatchedRandomPolicy). the region filter accordingly restricts activation to [event region start, course end]
+// instead of the event region itself, so that conjunctions with later conditions (e.g. Allegro of Valor's
+// is_last_straight_onetime==1&change_order_up_middle>=1) intersect to the later window instead of the empty set.
+// eventBounds returning null means the event cannot occur on this course, which empties the regions entirely.
+// NB. like the rest of the distribution-random machinery this samples where the event happens and not whether it
+// happens at all, and the comparison argument (>=1 vs >=3) is ignored, as it already was.
+function latchedKumaraswamyRandom(a: number, b: number, eventBounds: (course: CourseData) => Region | null) {
+	const policy = Object.freeze(new LatchedRandomPolicy(new KumaraswamyRandomPolicy(a, b), eventBounds));
+	function filter(regions: RegionList, _arg: number, course: CourseData, _horse: HorseParameters, _extra: RaceParameters) {
+		const ev = eventBounds(course);
+		if (ev == null) {
+			return new RegionList();
+		}
+		const bounds = new Region(ev.start, course.distance);
+		return regions.rmap(r => r.intersect(bounds));
+	}
+	return {
+		samplePolicy: policy as ActivationSamplePolicy,
+		filterEq: notSupported,
+		filterNeq: notSupported,
+		filterLt: notSupported,
+		filterLte: notSupported,
+		filterGt: notSupported,
+		filterGte: filter
+	};
+}
+
 export const noopUniformRandom = uniformRandom(noopAll);
 
 function noopSectionRandom(start: number, end: number) {
@@ -493,29 +521,19 @@ export const Conditions: {[cond: string]: Condition} = Object.freeze({
 	blocked_front_continuetime: noopKumaraswamyRandom(1.553, 6.456),
 	blocked_side_continuetime: noopKumaraswamyRandom(1.553, 6.456),
 	change_order_onetime: noopKumaraswamyRandom(1.553, 6.456),
-	change_order_up_end_after: kumaraswamyRandom(1.553, 6.456, {
-		filterGte(regions: RegionList, _0: number, course: CourseData, _1: HorseParameters, extra: RaceParameters) {
-			const bounds = new Region(CourseHelpers.phaseStart(course.distance, 2), course.distance);
-			return regions.rmap(r => r.intersect(bounds));
+	change_order_up_end_after: latchedKumaraswamyRandom(1.553, 6.456, course =>
+		new Region(CourseHelpers.phaseStart(course.distance, 2), course.distance)
+	),
+	change_order_up_finalcorner_after: latchedKumaraswamyRandom(1.553, 6.456, course => {
+		assert(CourseHelpers.isSortedByStart(course.corners), 'course corners must be sorted by start');
+		if (course.corners.length == 0) {
+			return null;
 		}
+		return new Region(course.corners[course.corners.length - 1].start, course.distance);
 	}),
-	change_order_up_finalcorner_after: kumaraswamyRandom(1.553, 6.456, {
-		filterGte(regions: RegionList, _0: number, course: CourseData, _1: HorseParameters, extra: RaceParameters) {
-			assert(CourseHelpers.isSortedByStart(course.corners), 'course corners must be sorted by start');
-			if (course.corners.length == 0) {
-				return new RegionList();
-			}
-			const finalCornerStart = course.corners[course.corners.length - 1].start;
-			const bounds = new Region(finalCornerStart, course.distance);
-			return regions.rmap(r => r.intersect(bounds));
-		}
-	}),
-	change_order_up_middle: kumaraswamyRandom(1.553, 6.456, {
-		filterGte(regions: RegionList, _0: number, course: CourseData, _1: HorseParameters, extra: RaceParameters) {
-			const bounds = new Region(CourseHelpers.phaseStart(course.distance, 1), CourseHelpers.phaseEnd(course.distance, 1));
-			return regions.rmap(r => r.intersect(bounds));
-		}
-	}),
+	change_order_up_middle: latchedKumaraswamyRandom(1.553, 6.456, course =>
+		new Region(CourseHelpers.phaseStart(course.distance, 1), CourseHelpers.phaseEnd(course.distance, 1))
+	),
 	compete_fight_count: uniformRandom({
 		filterGt(regions: RegionList, _0: number, course: CourseData, _1: HorseParameters, extra: RaceParameters) {
 			assert(CourseHelpers.isSortedByStart(course.straights), 'course straights must be sorted by start');

@@ -14,7 +14,7 @@ import { getParser } from '../ConditionParser';
 import {
 	Operator, CmpOperator, EqOperator, NeqOperator, LtOperator, LteOperator, GtOperator, GteOperator, AndOperator, OrOperator
 } from '../ActivationConditions';
-import { KumaraswamyRandomPolicy } from '../ActivationSamplePolicy';
+import { KumaraswamyRandomPolicy, LatchedRandomPolicy } from '../ActivationSamplePolicy';
 import { mockConditions } from './ConditionMatcher';
 
 import skills from '../data/skill_data.json';
@@ -138,7 +138,7 @@ function calcRows(builder, skillids, thresholds: number[]) {
 		}
 		if (sd.length == 0 || sd.every(d => d.regions.length == 0 || d.regions[0].start >= 9999)) return null;
 		// NB. this used to check `sd.samplePolicy` (on the array, always undefined); check the alternatives themselves
-		const modeled = sd.some(d => d.samplePolicy instanceof KumaraswamyRandomPolicy);
+		const modeled = sd.some(d => d.samplePolicy instanceof KumaraswamyRandomPolicy || d.samplePolicy instanceof LatchedRandomPolicy);
 
 		const g1 = b1.build();
 		const g2 = b2.build();

@@ -58,8 +58,8 @@ const seed = 'seed' in opts ? opts.seed : Math.floor(Math.random() * (-1 >>> 0))
 const rng1 = new Rule30CARng(seed);
 const rng2 = new Rule30CARng(seed);
 
-const triggers1 = skillDefs1.map(sd => sd.samplePolicy.sample(sd.regions, opts.nsamples, rng1));
-const triggers2 = skillDefs2.map(sd => sd.samplePolicy.sample(sd.regions, opts.nsamples, rng2));
+const triggers1 = skillDefs1.map(sd => sd.samplePolicy.sample(sd.regions, opts.nsamples, rng1, course));
+const triggers2 = skillDefs2.map(sd => sd.samplePolicy.sample(sd.regions, opts.nsamples, rng2, course));
 
 function addSkill(skills: PendingSkill[], sd: SkillData, triggers: Region[], i: number) {
 	skills.push({

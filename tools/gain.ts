@@ -52,7 +52,7 @@ cli.run((horse: HorseParameters, course: CourseData, defSkills: SkillData[], cli
 	const skillActivationChance = cliOptions.enableWisdomChecks ? Math.max(100.0 - 9000.0 / horse.wisdom) / 100.0 : 1.0;
 
 	function addTriggers(sd: SkillData) {
-		triggers.push(sd.samplePolicy.sample(sd.regions, nsamples, rng));
+		triggers.push(sd.samplePolicy.sample(sd.regions, nsamples, rng, course));
 	}
 
 	const debuffs = [];

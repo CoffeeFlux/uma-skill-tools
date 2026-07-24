@@ -52,7 +52,7 @@ cli.run((horse: HorseParameters, course: CourseData, defSkills: SkillData[], cli
 	const skills = [];
 	function addSkill(sd: SkillData) {
 		skillTypes[sd.skillId] = sd.effects[0].type;
-		const triggers = sd.samplePolicy.sample(sd.regions, nsamples, rng);
+		const triggers = sd.samplePolicy.sample(sd.regions, nsamples, rng, course);
 		skills.push({
 			skillId: sd.skillId,
 			rarity: sd.rarity,

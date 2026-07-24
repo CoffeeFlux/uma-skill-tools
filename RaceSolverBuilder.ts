@@ -701,7 +701,7 @@ export class RaceSolverBuilder {
 		this._extraSkillHooks.forEach(h => h(skilldata, horse, this._course));
 		const triggers = skilldata.map(sd => {
 			const sp = this._samplePolicyOverride[sd.perspective].get(sd.skillId) || sd.samplePolicy;
-			return sp.sample(sd.regions, this.nsamples, this._rng)
+			return sp.sample(sd.regions, this.nsamples, this._rng, this._course)
 		});
 		const wisdomRngs = new Map(Array.from(this._wisdomSeeds.entries()).map(([id,seed]) => [id,new Rule30CARng(...seed)]));
 

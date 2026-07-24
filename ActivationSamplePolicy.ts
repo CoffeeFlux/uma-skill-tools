@@ -1,8 +1,11 @@
 import { Region, RegionList } from './Region';
 import { PRNG } from './Random';
+import type { CourseData } from './CourseData';
 
 export interface ActivationSamplePolicy {
-	sample(regions: RegionList, nsamples: number, rng: PRNG): Region[]
+	// `course` is only needed by policies whose sampling depends on course geometry beyond the regions themselves
+	// (currently just LatchedRandomPolicy, which must know its event region); everything else ignores it.
+	sample(regions: RegionList, nsamples: number, rng: PRNG, course?: CourseData): Region[]
 
 	// essentially, when two conditions are combined with an AndOperator one should take precedence over the other
 	// immediate transitions into anything and straight_random/all_corner_random dominate everything except each other
@@ -133,10 +136,54 @@ export class BothRandomPolicy extends DistributionRandomPolicy {
 		throw new Error('BothRandomPolicy samples its parent policies directly');
 	}
 
-	sample(regions: RegionList, nsamples: number, rng: PRNG) {
-		const sa = this.a.sample(regions, nsamples, rng);
-		const sb = this.b.sample(regions, nsamples, rng);
+	sample(regions: RegionList, nsamples: number, rng: PRNG, course?: CourseData) {
+		const sa = this.a.sample(regions, nsamples, rng, course);
+		const sb = this.b.sample(regions, nsamples, rng, course);
 		return sa.map((ra,i) => ra.intersect(sb[i]));
+	}
+}
+
+// cumulative-count conditions (the change_order_up_* family) are true from the moment their underlying event happens
+// until the end of the race, not merely while the horse is inside the region where the event can occur: "passed
+// someone during the middle leg" remains checkable on the last straight long after the middle leg is over. modeling
+// them like the transient conditions above conflates the event region (where the event can physically happen) with
+// the truth window (where the condition holds), which makes conjunctions like Allegro of Valor's
+// is_last_straight_onetime==1&change_order_up_middle>=1 intersect to the empty set and silently never activate.
+// instead, model event-then-latch: sample the event position from the shape distribution over the event region, then
+// trigger at the first position >= the event position that lies within the activation regions (which the condition's
+// filter restricts to [event region start, course end] rather than the event region itself). if the event lands after
+// every activation region the conditions were never simultaneously observable and the skill does not activate
+// (Region(-1,-1), same convention as BothRandomPolicy).
+// this is the static-sampling shadow of modeling the condition as a first-passage process; an AND of latched
+// conditions fires at the last of the arrivals, which is exactly what BothRandomPolicy computes.
+export class LatchedRandomPolicy extends DistributionRandomPolicy {
+	constructor(readonly inner: DistributionRandomPolicy, readonly eventBounds: (course: CourseData) => Region | null) { super(); }
+
+	distribution(upper: number, nsamples: number, rng: PRNG) {
+		return this.inner.distribution(upper, nsamples, rng);
+	}
+
+	sample(regions: RegionList, nsamples: number, rng: PRNG, course?: CourseData) {
+		if (regions.length == 0) {
+			return [];
+		}
+		const ev = course != null ? this.eventBounds(course) : null;
+		if (ev == null) {
+			// without course information the event region is unknown; degrade to sampling within the activation
+			// regions like a plain distribution-random condition. (eventBounds itself returning null means the event
+			// cannot occur on this course at all, in which case the filter already emptied the regions and sample()
+			// is never reached; this branch is defensive.)
+			return super.sample(regions, nsamples, rng);
+		}
+		const rs = regions.slice().sort((a,b) => a.start - b.start);
+		const xs = this.inner.distribution(ev.end - ev.start, nsamples, rng);
+		const samples = [];
+		for (let i = 0; i < nsamples; ++i) {
+			const x = ev.start + xs[i];
+			const r = rs.find(r => r.end > x);
+			samples.push(r == null ? new Region(-1, -1) : new Region(Math.max(r.start, x), r.end));
+		}
+		return samples;
 	}
 }
 
