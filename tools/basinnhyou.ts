@@ -14,7 +14,7 @@ import { getParser } from '../ConditionParser';
 import {
 	Operator, CmpOperator, EqOperator, NeqOperator, LtOperator, LteOperator, GtOperator, GteOperator, AndOperator, OrOperator
 } from '../ActivationConditions';
-import { ErlangRandomPolicy } from '../ActivationSamplePolicy';
+import { KumaraswamyRandomPolicy } from '../ActivationSamplePolicy';
 import { mockConditions } from './ConditionMatcher';
 
 import skills from '../data/skill_data.json';
@@ -137,7 +137,8 @@ function calcRows(builder, skillids, thresholds: number[]) {
 			return null;
 		}
 		if (sd.length == 0 || sd.every(d => d.regions.length == 0 || d.regions[0].start >= 9999)) return null;
-		const modeled = sd.samplePolicy instanceof ErlangRandomPolicy;
+		// NB. this used to check `sd.samplePolicy` (on the array, always undefined); check the alternatives themselves
+		const modeled = sd.some(d => d.samplePolicy instanceof KumaraswamyRandomPolicy);
 
 		const g1 = b1.build();
 		const g2 = b2.build();

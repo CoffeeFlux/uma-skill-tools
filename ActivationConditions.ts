@@ -8,7 +8,7 @@ import { RaceParameters } from './RaceParameters';
 import {
 	ActivationSamplePolicy,
 	ImmediatePolicy, RandomPolicy,
-	DistributionRandomPolicy, UniformRandomPolicy, LogNormalRandomPolicy, ErlangRandomPolicy,
+	DistributionRandomPolicy, UniformRandomPolicy, LogNormalRandomPolicy, ErlangRandomPolicy, KumaraswamyRandomPolicy,
 	StraightRandomPolicy, AllCornerRandomPolicy
 } from './ActivationSamplePolicy';
 
@@ -238,6 +238,7 @@ function distributionRandomFactory<Ts extends unknown[]>(cls: new (...args: Ts) 
 export const logNormalRandom = distributionRandomFactory(LogNormalRandomPolicy);
 export const erlangRandom = distributionRandomFactory(ErlangRandomPolicy);
 export const uniformRandom = distributionRandomFactory(UniformRandomPolicy);
+export const kumaraswamyRandom = distributionRandomFactory(KumaraswamyRandomPolicy);
 
 export function noopLogNormalRandom(mu: number, sigma: number) {
 	return logNormalRandom(mu, sigma, noopAll);
@@ -245,6 +246,16 @@ export function noopLogNormalRandom(mu: number, sigma: number) {
 
 export function noopErlangRandom(k: number, lambda: number) {
 	return erlangRandom(k, lambda, noopAll);
+}
+
+// the Kumaraswamy shape parameters below were fitted (least squares on 19 evenly-spaced quantiles, 4M samples) to
+// reproduce the shapes the rescaled Erlang distributions previously produced, for behavior continuity:
+//   Kumaraswamy(0.848, 4.575) ≈ rescaled Erlang(k=1)
+//   Kumaraswamy(1.553, 6.456) ≈ rescaled Erlang(k=3)
+//   Kumaraswamy(1.882, 6.962) ≈ rescaled Erlang(k=5)
+// (rms quantile error ≤ 0.01 of the range, well under the fitting noise in the original eyeballed parameters)
+export function noopKumaraswamyRandom(a: number, b: number) {
+	return kumaraswamyRandom(a, b, noopAll);
 }
 
 export const noopUniformRandom = uniformRandom(noopAll);
@@ -471,24 +482,24 @@ export const Conditions: {[cond: string]: Condition} = Object.freeze({
 	base_stamina: valueFilter((_: CourseData, horse: HorseParameters, extra: RaceParameters) => horse.stamina),
 	base_guts: valueFilter((_: CourseData, horse: HorseParameters, extra: RaceParameters) => horse.guts),
 	base_wiz: valueFilter((_: CourseData, horse: HorseParameters, extra: RaceParameters) => horse.wisdom),
-	bashin_diff_behind: noopErlangRandom(3, 2.0),
-	bashin_diff_infront: noopErlangRandom(3, 2.0),
-	behind_near_lane_time: noopErlangRandom(3, 2.0),
+	bashin_diff_behind: noopKumaraswamyRandom(1.553, 6.456),
+	bashin_diff_infront: noopKumaraswamyRandom(1.553, 6.456),
+	behind_near_lane_time: noopKumaraswamyRandom(1.553, 6.456),
 	// NB. at least in theory _set1 should have a slightly more early-biased distribution since it's technically easier to activate, but I don't
 	// really think it makes much of a difference. Same with blocked_front vs blocked_front_continuetime I suppose.
-	behind_near_lane_time_set1: noopErlangRandom(3, 2.0),
-	blocked_all_continuetime: noopErlangRandom(3, 2.0),
-	blocked_front: noopErlangRandom(3, 2.0),
-	blocked_front_continuetime: noopErlangRandom(3, 2.0),
-	blocked_side_continuetime: noopErlangRandom(3, 2.0),
-	change_order_onetime: noopErlangRandom(3, 2.0),
-	change_order_up_end_after: erlangRandom(3, 2.0, {
+	behind_near_lane_time_set1: noopKumaraswamyRandom(1.553, 6.456),
+	blocked_all_continuetime: noopKumaraswamyRandom(1.553, 6.456),
+	blocked_front: noopKumaraswamyRandom(1.553, 6.456),
+	blocked_front_continuetime: noopKumaraswamyRandom(1.553, 6.456),
+	blocked_side_continuetime: noopKumaraswamyRandom(1.553, 6.456),
+	change_order_onetime: noopKumaraswamyRandom(1.553, 6.456),
+	change_order_up_end_after: kumaraswamyRandom(1.553, 6.456, {
 		filterGte(regions: RegionList, _0: number, course: CourseData, _1: HorseParameters, extra: RaceParameters) {
 			const bounds = new Region(CourseHelpers.phaseStart(course.distance, 2), course.distance);
 			return regions.rmap(r => r.intersect(bounds));
 		}
 	}),
-	change_order_up_finalcorner_after: erlangRandom(3, 2.0, {
+	change_order_up_finalcorner_after: kumaraswamyRandom(1.553, 6.456, {
 		filterGte(regions: RegionList, _0: number, course: CourseData, _1: HorseParameters, extra: RaceParameters) {
 			assert(CourseHelpers.isSortedByStart(course.corners), 'course corners must be sorted by start');
 			if (course.corners.length == 0) {
@@ -499,7 +510,7 @@ export const Conditions: {[cond: string]: Condition} = Object.freeze({
 			return regions.rmap(r => r.intersect(bounds));
 		}
 	}),
-	change_order_up_middle: erlangRandom(3, 2.0, {
+	change_order_up_middle: kumaraswamyRandom(1.553, 6.456, {
 		filterGte(regions: RegionList, _0: number, course: CourseData, _1: HorseParameters, extra: RaceParameters) {
 			const bounds = new Region(CourseHelpers.phaseStart(course.distance, 1), CourseHelpers.phaseEnd(course.distance, 1));
 			return regions.rmap(r => r.intersect(bounds));
@@ -638,7 +649,7 @@ export const Conditions: {[cond: string]: Condition} = Object.freeze({
 			return [regions, (s: RaceState) => s.hp.hpRatioRemaining() >= hpPer] as [RegionList, DynamicCondition];
 		}
 	}),
-	infront_near_lane_time: noopErlangRandom(3, 2.0),
+	infront_near_lane_time: noopKumaraswamyRandom(1.553, 6.456),
 	is_activate_any_skill: immediate({
 		filterEq(regions: RegionList, one: number, _0: CourseData, _1: HorseParameters, extra: RaceParameters) {
 			assert(one == 1, 'must be is_activate_any_skill==1');
@@ -743,9 +754,9 @@ export const Conditions: {[cond: string]: Condition} = Object.freeze({
 			return regions.rmap(r => r.intersect(trigger));
 		}
 	}),
-	is_move_lane: noopErlangRandom(5, 1.0),
-	is_overtake: noopErlangRandom(1, 2.0),
-	is_surrounded: noopErlangRandom(3, 2.0),
+	is_move_lane: noopKumaraswamyRandom(1.882, 6.962),
+	is_overtake: noopKumaraswamyRandom(0.848, 4.575),
+	is_surrounded: noopKumaraswamyRandom(1.553, 6.456),
 	is_temptation: immediate({
 		filterEq(regions: RegionList, b: number, _0: CourseData, _1: HorseParameters, extra: RaceParameters) {
 			return [regions, (s: RaceState) => +s.isKakari == b] as [RegionList, DynamicCondition];
@@ -779,7 +790,7 @@ export const Conditions: {[cond: string]: Condition} = Object.freeze({
 		}
 	}),
 	motivation: valueFilter((_0: CourseData, _1: HorseParameters, extra: RaceParameters) => extra.mood + 3),  // go from -2 to 2 to 1-5 scale
-	near_count: noopErlangRandom(3, 2.0),
+	near_count: noopKumaraswamyRandom(1.553, 6.456),
 	order: orderFilter((pos: number, _: number) => pos),
 	order_rate: orderFilter((rate: number, numUmas: number) => Math.round(numUmas * (rate / 100.0))),
 	order_rate_in20_continue: orderInFilter(0.2),
@@ -789,8 +800,8 @@ export const Conditions: {[cond: string]: Condition} = Object.freeze({
 	order_rate_out40_continue: orderOutFilter(0.4),
 	order_rate_out50_continue: orderOutFilter(0.5),
 	order_rate_out70_continue: orderOutFilter(0.7),
-	overtake_target_no_order_up_time: noopErlangRandom(3, 2.0),
-	overtake_target_time: noopErlangRandom(3, 2.0),
+	overtake_target_no_order_up_time: noopKumaraswamyRandom(1.553, 6.456),
+	overtake_target_time: noopKumaraswamyRandom(1.553, 6.456),
 	phase: {
 		samplePolicy: ImmediatePolicy,
 		filterEq(regions: RegionList, phase: number, course: CourseData, _: HorseParameters, extra: RaceParameters) {

@@ -244,6 +244,24 @@ export class ErlangRandomPolicy extends DistributionRandomPolicy {
 	}
 }
 
+// the distribution-random conditions model "where in the eligible range does the condition fire", and since the
+// rescale in the policies above cancels the scale parameters, what is actually being chosen is a shape on [0,1] that
+// gets multiplied by `upper`. the Kumaraswamy distribution is that object directly: natively supported on [0,1] with
+// two real shape parameters and the closed-form inverse CDF F⁻¹(u) = (1 - (1-u)^(1/b))^(1/a), so sampling is exact
+// with a single uniform draw - no unbounded intermediary, no rescaling step, no clamping atoms at the endpoints, and
+// no location/scale parameters that cancel out anyway.
+export class KumaraswamyRandomPolicy extends DistributionRandomPolicy {
+	constructor(readonly a: number, readonly b: number) { super(); }
+
+	distribution(upper: number, nsamples: number, rng: PRNG) {
+		const nums = [];
+		for (let i = 0; i < nsamples; ++i) {
+			nums.push(Math.floor(upper * Math.pow(1 - Math.pow(1 - rng.random(), 1 / this.b), 1 / this.a)));
+		}
+		return nums;
+	}
+}
+
 export const StraightRandomPolicy = Object.freeze({
 	sample(regions: RegionList, nsamples: number, rng: PRNG) {
 		// regular RandomPolicy weights regions by their length, so any given point has an equal chance to be chosen across all regions
