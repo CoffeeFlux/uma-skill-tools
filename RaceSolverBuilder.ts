@@ -699,10 +699,8 @@ export class RaceSolverBuilder {
 		const makeSkill = buildSkillData.bind(null, horse, this._raceParams, this._course, wholeCourse, this._parser);
 		const skilldata = this._skills.flatMap(({id,p}) => makeSkill(id, p));
 		this._extraSkillHooks.forEach(h => h(skilldata, horse, this._course));
-		const triggers = skilldata.map(sd => {
-			const sp = this._samplePolicyOverride[sd.perspective].get(sd.skillId) || sd.samplePolicy;
-			return sp.sample(sd.regions, this.nsamples, this._rng, this._course)
-		});
+		const samplePolicies = skilldata.map(sd => this._samplePolicyOverride[sd.perspective].get(sd.skillId) || sd.samplePolicy);
+		const triggers = skilldata.map((sd,sdi) => samplePolicies[sdi].sample(sd.regions, this.nsamples, this._rng, this._course));
 		const wisdomRngs = new Map(Array.from(this._wisdomSeeds.entries()).map(([id,seed]) => [id,new Rule30CARng(...seed)]));
 
 		// must come after skill activations are decided because conditions like base_power depend on base stats
@@ -721,6 +719,9 @@ export class RaceSolverBuilder {
 					rarity: sd.rarity,
 					wisdomCheck: sd.wisdomCheck,
 					trigger: triggers[sdi][i % triggers[sdi].length],
+					// deterministic triggers can fall through to later regions if their dynamic conditions aren't
+					// satisfied in time (see PendingSkill#laterTriggers); sampled triggers are single-shot
+					laterTriggers: samplePolicies[sdi] === ImmediatePolicy && sd.regions.length > 1 ? sd.regions : undefined,
 					extraCondition: sd.extraCondition,
 					effects: sd.effects
 				})).filter(sd => !this._useWisdomChecks || !sd.wisdomCheck || wisdomRngs.get(sd.skillId).random() < skillActivationChance[sd.perspective]);

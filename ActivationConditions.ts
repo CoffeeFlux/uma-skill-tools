@@ -429,37 +429,15 @@ function orderOutFilter(rate: number) {
 export const Conditions: {[cond: string]: Condition} = Object.freeze({
 	accumulatetime: immediate({
 		filterGte(regions: RegionList, t: number, course: CourseData, _: HorseParameters, extra: RaceParameters) {
-			// unfortunate hack. because we end up selecting only one region to use as the trigger, if the dynamic
-			// condition isn't satisfied there the skill fails to activate, even if it would have activated in a later
-			// region. this mostly affects じゃじゃウマ娘, where if a track starts with a hill but it takes longer than 10s
-			// to traverse the hill the skill fails to activate entirely, when really it should activate on a later hill
-			// but we threw the other regions out because it has the immediate sample policy.
-			// so resolve this by estimating where the skill can't possibly activate and then statically filtering that
-			// area out. due to the need to accelerate as well as factors like pace down etc, baseSpeed * t typically
-			// overestimates the distance traveled so use 0.85 * baseSpeed * t instead. underestimating is a bit
-			// dangerous but i believe this solves all the cases where this is an issue in practice.
-			// 
-			// VERY UGLY: skip doing this for skills that combine accumulatetime with a random or mock random condition,
-			// because otherwise this would cause it to whiff less than it should
-			// (consider the case of phase_random==0&accumulatetime>=3 for example)
-			// FIXME nasty
-			let allowedRegion;
-			if ([
-				'100302211', '100403111', '100501111', '101001211', '101002111', '101021', '101802111', '101901111', '102002211', '102302111',
-				'103103211', '103203211', '103301111', '103501111', '103801211', '103802111', '103802121', '104002111', '104201211', '105201111',
-				'105202211', '106003111', '106401111', '109302211', '110001111', '110001121', '110001211', '110602111', '110651', '112402111',
-				'120681', '200401', '200441', '200442', '200521', '200831', '200861', '200891', '200921', '201011', '201012', '201021', '201022',
-				'201071', '201072', '201091', '201092', '201141', '201142', '201201', '201202', '201271', '201272', '201302', '201401', '201402',
-				'201491', '201492', '201591', '201592', '201651', '201652', '201661', '201662', '202301', '202302', '202303', '202351', '202352',
-				'203601', '203602', '203861', '203862', '203871', '203872', '204001', '204002', '204041', '204042', '408011', '409051', '412011',
-				'412031'
-			].indexOf(extra.skillId) > -1) {
-				allowedRegion = new Region(0, course.distance);
-			} else {
-				const baseSpeed = 20.0 - (course.distance - 2000) / 1000.0;
-				allowedRegion = new Region(0.85 * baseSpeed * t, course.distance);
-			}
-			return [regions.rmap(r => r.intersect(allowedRegion)), (s: RaceState) => s.accumulatetime.t >= t] as [RegionList, DynamicCondition];
+			// this used to statically trim regions before an estimated 0.85 * baseSpeed * t meters (with a hardcoded
+			// exemption list of skills combining accumulatetime with random conditions), because immediate triggers
+			// committed to a single region: if the dynamic condition wasn't satisfied there yet the skill whiffed
+			// entirely, even though the condition latches and a later region would have qualified (mostly affecting
+			// the じゃじゃウマ娘 hill recoveries). immediate triggers now fall through to later regions when the dynamic
+			// condition isn't satisfied in time (see PendingSkill#laterTriggers), which handles this exactly, and
+			// sampled triggers should whiff naturally when they land before the condition holds - which is precisely
+			// what the exemption list preserved.
+			return [regions, (s: RaceState) => s.accumulatetime.t >= t] as [RegionList, DynamicCondition];
 		}
 	}),
 	activate_count_all: immediate({

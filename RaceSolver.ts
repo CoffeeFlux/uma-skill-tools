@@ -167,6 +167,13 @@ export interface PendingSkill {
 	perspective?: Perspective
 	rarity: SkillRarity
 	trigger: Region
+	// all the regions this skill could activate in, for skills with a deterministic (immediate) sample policy. those
+	// model "activates at the first position where every condition holds", so if `trigger` expires without the dynamic
+	// condition having been satisfied the next region should get a chance, rather than the skill whiffing outright
+	// the way a sampled trigger placement should. includes the region `trigger` was placed in (index 0); the solver
+	// tracks its progress in nextTriggerIdx.
+	laterTriggers?: readonly Region[]
+	nextTriggerIdx?: number
 	extraCondition: DynamicCondition
 	effects: SkillEffect[]
 }
@@ -267,7 +274,9 @@ export class RaceSolver {
 		this.hp = params.hp;
 		this.pacer = params.pacer || null;
 		this.rng = params.rng;
-		this.pendingSkills = params.skills.slice();  // copy since we remove from it
+		// copy the array since we remove from it, and the objects since trigger/nextTriggerIdx are mutated on trigger
+		// fallthrough (the builder may hand the same skill objects to a redone run)
+		this.pendingSkills = params.skills.map(s => Object.assign({}, s));
 		this.pendingRemoval = new Set();
 		this.usedSkills = new Set();
 		this.gorosiRng = new Rule30CARng(this.rng.int32());
@@ -636,12 +645,24 @@ export class RaceSolver {
 		let activateCountThisFrame = 0;
 		for (let i = this.pendingSkills.length; --i >= 0;) {
 			const s = this.pendingSkills[i];
-			if (this.pos >= s.trigger.end || this.pendingRemoval.has(s.skillId)) {  // NB. `Region`s are half-open [start,end) intervals. If pos == end we are out of the trigger.
-				// skill failed to activate
-				// FIXME removing from pendingSkills here means that 564 will never pick a skill that already passed its chance to activate
-				// (and failed) before 564 procced, which is wrong
+			if (this.pendingRemoval.has(s.skillId)) {
 				this.pendingSkills.splice(i,1);
 				this.pendingRemoval.delete(s.skillId);
+			} else if (this.pos >= s.trigger.end) {  // NB. `Region`s are half-open [start,end) intervals. If pos == end we are out of the trigger.
+				// deterministic triggers fall through to the next region their conditions can hold in; sampled trigger
+				// placements are single-shot (see PendingSkill#laterTriggers)
+				let idx = s.nextTriggerIdx || 1;
+				const n = s.laterTriggers ? s.laterTriggers.length : 0;
+				while (idx < n && this.pos >= s.laterTriggers[idx].end) ++idx;
+				if (idx < n) {
+					s.trigger = s.laterTriggers[idx];
+					s.nextTriggerIdx = idx + 1;
+				} else {
+					// skill failed to activate
+					// FIXME removing from pendingSkills here means that 564 will never pick a skill that already passed its chance to activate
+					// (and failed) before 564 procced, which is wrong
+					this.pendingSkills.splice(i,1);
+				}
 			} else if (this.pos >= s.trigger.start && s.extraCondition(this)) {
 				this.activateSkill(s);
 				this.pendingSkills.splice(i,1);
