@@ -128,10 +128,12 @@ export class OrOperator {
 	samplePolicy: ActivationSamplePolicy
 
 	constructor(readonly left: Operator, readonly right: Operator) {
-		// not entirely clear what the right thing to do here is
-		// but i'm pretty sure there are no skills with disjunctive conditions that
-		// would have different sample policies (probably)
-		this.samplePolicy = left.samplePolicy.reconcile(right.samplePolicy);
+		// disjunctions reconcile differently from conjunctions: an AndOperator combining two distribution-random
+		// policies needs both conditions satisfied (BothRandomPolicy), which would be wrong here. reconcileOr
+		// preserves the old behavior of reconcile() for every disjunctive case (see the comments in
+		// ActivationSamplePolicy). it's still not entirely clear what the ideal thing to do here is, but there
+		// are no skills with disjunctive conditions whose branches have meaningfully different sample policies.
+		this.samplePolicy = left.samplePolicy.reconcileOr(right.samplePolicy);
 	}
 
 	apply(regions: RegionList, course: CourseData, horse: HorseParameters, extra: RaceParameters) {

@@ -9,7 +9,8 @@ export interface ActivationSamplePolicy {
 	// NB. currently there are no skills that combine straight_random or all_corner_random with anything other than
 	// immediate conditions (running_style or distance_type), and obviously they are mutually exclusive with each other
 	// the actual x_random (phase_random, down_slope_random, etc) ones should dominate the ones that are not actually
-	// random but merely modeled with a probability distribution
+	// random but merely modeled with a probability distribution. two distribution-modeled conditions combine into a
+	// BothRandomPolicy (see below).
 	// use smalltalk-style double dispatch to implement the transitions
 	reconcile(other: ActivationSamplePolicy): ActivationSamplePolicy
 	reconcileImmediate(other: ActivationSamplePolicy): ActivationSamplePolicy
@@ -17,6 +18,10 @@ export interface ActivationSamplePolicy {
 	reconcileRandom(other: ActivationSamplePolicy): ActivationSamplePolicy
 	reconcileStraightRandom(other: ActivationSamplePolicy): ActivationSamplePolicy
 	reconcileAllCornerRandom(other: ActivationSamplePolicy): ActivationSamplePolicy
+
+	// OrOperator combines policies with this instead of reconcile; conjunction and disjunction need different
+	// treatment (see DistributionRandomPolicy#reconcileOr). for everything else it's the same as reconcile.
+	reconcileOr(other: ActivationSamplePolicy): ActivationSamplePolicy
 }
 
 export const ImmediatePolicy = Object.freeze({
@@ -26,7 +31,8 @@ export const ImmediatePolicy = Object.freeze({
 	reconcileDistributionRandom(other: ActivationSamplePolicy) { return other; },
 	reconcileRandom(other: ActivationSamplePolicy) { return other; },
 	reconcileStraightRandom(other: ActivationSamplePolicy) { return other; },
-	reconcileAllCornerRandom(other: ActivationSamplePolicy) { return other; }
+	reconcileAllCornerRandom(other: ActivationSamplePolicy) { return other; },
+	reconcileOr(other: ActivationSamplePolicy) { return this.reconcile(other); }
 });
 
 export const RandomPolicy = Object.freeze({
@@ -49,7 +55,8 @@ export const RandomPolicy = Object.freeze({
 	reconcileDistributionRandom(other: ActivationSamplePolicy) { return this; },
 	reconcileRandom(other: ActivationSamplePolicy) { return other; },
 	reconcileStraightRandom(other: ActivationSamplePolicy) { return other; },
-	reconcileAllCornerRandom(other: ActivationSamplePolicy) { return other; }
+	reconcileAllCornerRandom(other: ActivationSamplePolicy) { return other; },
+	reconcileOr(other: ActivationSamplePolicy) { return this.reconcile(other); }
 });
 
 export abstract class DistributionRandomPolicy {
@@ -81,12 +88,14 @@ export abstract class DistributionRandomPolicy {
 	reconcile(other: ActivationSamplePolicy) { return other.reconcileDistributionRandom(this); }
 	reconcileImmediate(_: ActivationSamplePolicy) { return this; }
 	reconcileDistributionRandom(other: ActivationSamplePolicy) {
-		// this is, strictly speaking, probably not the right thing to do
-		// probably this should be the joint probability distribution of `this` and `other`, but that is too complex to implement
-		// TODO this is something of a stopgap measure anyway, since eventually we'd like to model most of the conditions that use
-		// DistributionRandomPolicy with dynamic conditions using a Poisson process or something, which would make this obsolete
-		// (this would also enable other features like cooldowns for distribution-random skills).
-		return this;
+		// both conditions must hold simultaneously, so sample both and activate on the intersection of the trigger
+		// windows (see BothRandomPolicy below). no joint distribution is needed for this: the trigger of the
+		// conjunction is the max of the two triggers, and sampling the max of independent draws only needs the
+		// marginals. what the marginals genuinely cannot capture is any dependence between the underlying conditions;
+		// TODO eventually we'd like to model most of the conditions that use DistributionRandomPolicy with dynamic
+		// conditions using hazard rates/a Poisson process, which would subsume this entirely (and also enable other
+		// features like cooldowns for distribution-random skills).
+		return new BothRandomPolicy(other, this);
 	}
 	// this is probably not exactly the right thing to do either, but the true random conditions do need to place a fixed trigger
 	// statically ahead of time, uninfluenced by us. this means that the only alternatives are 1) this condition is coincidentally
@@ -95,6 +104,40 @@ export abstract class DistributionRandomPolicy {
 	reconcileRandom(other: ActivationSamplePolicy) { return other; }
 	reconcileStraightRandom(other: ActivationSamplePolicy) { return other; }
 	reconcileAllCornerRandom(other: ActivationSamplePolicy) { return other; }
+
+	// disjunctions get different treatment than conjunctions: for an AndOperator both conditions must hold, so
+	// BothRandomPolicy is correct there, but for an OrOperator either condition suffices and combining with
+	// BothRandomPolicy would systematically bias triggers late. historically OrOperator reused reconcile(), which for
+	// two distribution-random policies simply kept the right operand; preserve exactly that behavior (the branches of
+	// an @ tend to model closely related conditions, so one branch's distribution is a reasonable stand-in for the
+	// union of the branches).
+	reconcileOr(other: ActivationSamplePolicy) {
+		return other instanceof DistributionRandomPolicy ? other : this.reconcile(other);
+	}
+}
+
+// two distribution-modeled conditions combined with an AndOperator. within the model's window semantics a
+// distribution-random condition is latched from its sampled trigger position until the end of the containing region
+// (DistributionRandomPolicy#sample returns Region(pos, region end)), so the conjunction is satisfied on exactly the
+// intersection of the two windows: activation at the later of the two sampled triggers, or never if the windows don't
+// overlap. Region#intersect returns Region(-1,-1) for disjoint windows, which RaceSolver already treats as a trigger
+// that cannot activate (pos >= trigger.end is immediately true), which is the correct semantics for "the conditions
+// were never simultaneously satisfied".
+// NB. sampling the parents independently means the combined trigger has CDF F·G (the distribution of the max of
+// independent draws); dependence between the underlying conditions is not modeled, which is the honest choice absent
+// any information about it.
+export class BothRandomPolicy extends DistributionRandomPolicy {
+	constructor(readonly a: ActivationSamplePolicy, readonly b: ActivationSamplePolicy) { super(); }
+
+	distribution(_0: number, _1: number, _2: PRNG): number[] {
+		throw new Error('BothRandomPolicy samples its parent policies directly');
+	}
+
+	sample(regions: RegionList, nsamples: number, rng: PRNG) {
+		const sa = this.a.sample(regions, nsamples, rng);
+		const sb = this.b.sample(regions, nsamples, rng);
+		return sa.map((ra,i) => ra.intersect(sb[i]));
+	}
 }
 
 export class UniformRandomPolicy extends DistributionRandomPolicy {
@@ -220,7 +263,8 @@ export const StraightRandomPolicy = Object.freeze({
 	reconcileDistributionRandom(_: ActivationSamplePolicy) { return this; },
 	reconcileRandom(_: ActivationSamplePolicy) { return this; },
 	reconcileStraightRandom(other: ActivationSamplePolicy) { return other; },
-	reconcileAllCornerRandom(other: ActivationSamplePolicy) { throw new Error('cannot reconcile StraightRandomPolicy with AllCornerRandomPolicy'); }
+	reconcileAllCornerRandom(other: ActivationSamplePolicy) { throw new Error('cannot reconcile StraightRandomPolicy with AllCornerRandomPolicy'); },
+	reconcileOr(other: ActivationSamplePolicy) { return this.reconcile(other); }
 });
 
 export const AllCornerRandomPolicy = Object.freeze({
@@ -257,5 +301,6 @@ export const AllCornerRandomPolicy = Object.freeze({
 	reconcileDistributionRandom(_: ActivationSamplePolicy) { return this; },
 	reconcileRandom(_: ActivationSamplePolicy) { return this; },
 	reconcileStraightRandom(_: ActivationSamplePolicy) { throw new Error('cannot reconcile StraightRandomPolicy with AllCornerRandomPolicy'); },
-	reconcileAllCornerRandom(_: ActivationSamplePolicy) { return this; }
+	reconcileAllCornerRandom(_: ActivationSamplePolicy) { return this; },
+	reconcileOr(other: ActivationSamplePolicy) { return this.reconcile(other); }
 });

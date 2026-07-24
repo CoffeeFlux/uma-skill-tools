@@ -87,7 +87,8 @@ const mockSamplePolicy = Object.freeze({
 	reconcileLogNormalRandom(_) { return this; },
 	reconcileRandom(_) { return this; },
 	reconcileStraightRandom(_) { return this; },
-	reconcileAllCornerRandom(_) { return this; }
+	reconcileAllCornerRandom(_) { return this; },
+	reconcileOr(_) { return this; }
 });
 export const mockConditions = new Proxy({}, {
 	get(cache: object, prop: string) {
